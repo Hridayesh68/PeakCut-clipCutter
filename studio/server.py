@@ -36,7 +36,7 @@ def _quiet(fn):
 
 app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None)
 WEB = config.ROOT / "web"
-OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
+OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/auth/callback", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
          "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html"}
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
@@ -132,9 +132,9 @@ class Gate:
             # so another website cannot reach it through a made-up name that points at this machine.
             if not _own_address(req.headers.get("host", "")):
                 return await deny(403, "Open PeakCut by its own address.")
-            if path == "/" or path == "/reset" or path.startswith("/auth/"):
+            if path == "/" or path == "/reset" or (path.startswith("/auth/") and path != "/auth/callback" and not path.startswith("/auth/google/")):
                 return await deny(303, "", redirect="/app")
-            if path.startswith("/api/auth/") and path != "/api/auth/me":
+            if path.startswith("/api/auth/") and path not in ("/api/auth/me", "/api/auth/instagram"):
                 return await deny(404, "Not Found")
             user = auth._local or await run_in_threadpool(auth.local_user)
         if admin_area:
@@ -1362,6 +1362,36 @@ def connect_callback(platform: str, code: str = "", state: str = "", error: str 
     except Exception as e:  # noqa: BLE001
         return _back(connect_error=f"{name} was not connected: {safe.friendly(e, 240)}")
     return _back(connected=platform, name=acc["name"])
+
+
+@app.get("/auth/callback")
+def auth_callback(code: str = "", state: str = "", error: str = "", error_description: str = "",
+                  error_reason: str = ""):
+    return connect_callback("instagram", code=code, state=state, error=error,
+                            error_description=error_description, error_reason=error_reason)
+
+
+@app.get("/api/auth/instagram")
+def api_auth_instagram():
+    return {"url": accounts.connect_url("instagram")}
+
+
+@app.post("/api/publish-reel")
+def api_publish_reel(request: Request, body: dict = Body(...)):
+    acc_id = body.get("account_id")
+    video_path = body.get("video_path")
+    caption = body.get("caption", "")
+    job_id = body.get("job_id", "")
+    acc = accounts.get(acc_id) if acc_id else next((a for a in accounts._all() if a["platform"] == "instagram"), None)
+    if not acc:
+        raise HTTPException(400, "No connected Instagram account found.")
+    if not video_path:
+        raise HTTPException(400, "Missing video_path.")
+    p = Path(video_path)
+    if not p.is_file():
+        raise HTTPException(404, "Video file not found.")
+    post_id, link = accounts.instagram_upload(acc, p, caption, job_id)
+    return {"ok": True, "id": post_id, "link": link}
 
 
 @app.get("/pub/{token}.mp4")
