@@ -1384,14 +1384,17 @@ def api_publish_reel(request: Request, body: dict = Body(...)):
     job_id = body.get("job_id", "")
     acc = accounts.get(acc_id) if acc_id else next((a for a in accounts._all() if a["platform"] == "instagram"), None)
     if not acc:
-        raise HTTPException(400, "No connected Instagram account found.")
+        raise HTTPException(400, "No connected Instagram account found. Connect an account first.")
     if not video_path:
-        raise HTTPException(400, "Missing video_path.")
+        raise HTTPException(400, "Missing video_path in request body.")
     p = Path(video_path)
     if not p.is_file():
-        raise HTTPException(404, "Video file not found.")
-    post_id, link = accounts.instagram_upload(acc, p, caption, job_id)
-    return {"ok": True, "id": post_id, "link": link}
+        raise HTTPException(404, f"Video file not found at: {video_path}")
+    try:
+        post_id, link = accounts.instagram_upload(acc, p, caption, job_id)
+        return {"ok": True, "id": post_id, "link": link}
+    except Exception as e:
+        raise HTTPException(502, f"Instagram Reel publishing failed: {safe.friendly(e, 400)}")
 
 
 @app.get("/pub/{token}.mp4")

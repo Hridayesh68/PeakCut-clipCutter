@@ -1,0 +1,20 @@
+{
+  "name": "peakcut-clipcutter",
+  "version": "1.0.0",
+  "description": "Turn long videos and live streams into captioned vertical clips, ready to post. Free and open source: run it on your own computer or server, with your own AI key.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.21.1",
+    "cloudinary": "^2.11.0",
+    "dotenv": "^18.0.10"
+  }
+}

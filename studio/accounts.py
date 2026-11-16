@@ -318,6 +318,16 @@ def remove(aid):
 
 def _check(r, what):
     if r.status_code >= 400:
+        try:
+            err = r.json().get("error", {})
+            if isinstance(err, dict) and err.get("message"):
+                msg = err["message"]
+                code = f" [Code: {err['code']}]" if "code" in err else ""
+                subcode = f" [Subcode: {err['error_subcode']}]" if "error_subcode" in err else ""
+                trace = f" (fbtrace_id: {err['fbtrace_id']})" if "fbtrace_id" in err else ""
+                raise RuntimeError(f"{what} failed ({r.status_code}): {msg}{code}{subcode}{trace}")
+        except (ValueError, TypeError, KeyError):
+            pass
         raise RuntimeError(f"{what} failed ({r.status_code}): {r.text[:300]}")
     return r
 
@@ -484,53 +494,59 @@ def _ig_token(acc) -> str:
 
 
 def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
-    """3-step Reels publishing flow using Meta Graph API v27.0:
-    1. Create Container: POST /{ig_user_id}/media with media_type=REELS, video_url=<PUBLIC_URL>, caption, access_token
-    2. Poll Status: GET /{creation_id}?fields=status_code&access_token until 'FINISHED'
-    3. Publish Container: POST /{ig_user_id}/media_publish with creation_id and access_token
+    """End-to-end Instagram Reel Publishing Pipeline:
+    Stage 1: Stage local video clip to Cloudinary CDN for direct .mp4 crawler access
+    Stage 2: Create Container on Meta Graph API v27.0
+    Stage 3: Poll Container Status until FINISHED (up to 24 attempts / 2 minutes)
+    Stage 4: Publish Reel Live
     """
     token = _ig_token(acc)
-    uid = acc.get("user_id") or config.env("META_IG_USER_ID") or "17841462625637581"
+    uid = acc.get("user_id") or config.env("META_IG_USER_ID") or config.env("IG_USER_ID") or "17841462625637581"
+    auth_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # Step 1: Create Container
-    video_url = clip_link(job_id, path.name) if job_id else f"{config.PUBLIC_URL}/pub/{path.name}"
+    # Stage 1: Upload to Cloudinary CDN so Meta's crawler can download directly without ngrok warnings
+    from . import cloudinary_service
+    try:
+        video_url = cloudinary_service.upload_clip_to_cloudinary(path)
+    except Exception as e:
+        if config.PUBLIC_URL.startswith("https://") and job_id:
+            video_url = clip_link(job_id, path.name)
+        else:
+            raise RuntimeError(f"Cloud video staging failed: {e}") from e
+
+    # Stage 2: Create Media Container
     post_data = {
         "media_type": "REELS",
         "video_url": video_url,
         "caption": caption[:2200],
-        "access_token": token,
     }
-    box = _check(httpx.post(f"{GRAPH_FB}/{uid}/media", data=post_data, timeout=60),
+    box = _check(httpx.post(f"{GRAPH_FB}/{uid}/media", json=post_data, headers=auth_headers, timeout=60),
                  "Creating Instagram Reel container").json()
     creation_id = box["id"]
 
-    # Step 2: Poll Status until FINISHED
-    for _ in range(90):
-        st = _check(httpx.get(f"{GRAPH_FB}/{creation_id}", params={
-            "fields": "status_code,status",
-            "access_token": token,
-        }, timeout=30), "Checking Instagram Reel processing status").json()
+    # Stage 3: Poll Container Status until FINISHED
+    for _ in range(24):
+        time.sleep(5)
+        st = _check(httpx.get(f"{GRAPH_FB}/{creation_id}", params={"fields": "status_code,status"},
+                              headers={"Authorization": f"Bearer {token}"}, timeout=30),
+                    "Checking Instagram Reel processing status").json()
         status_code = st.get("status_code")
         if status_code in ("FINISHED", "PUBLISHED"):
             break
         if status_code in ("ERROR", "EXPIRED"):
             raise RuntimeError(f"Instagram rejected the video: {st.get('status', status_code)}")
-        time.sleep(5)
     else:
-        raise RuntimeError("Instagram took too long to process the video.")
+        raise RuntimeError("Instagram took too long to transcode the video (timed out after 2 minutes).")
 
-    # Step 3: Publish Container
-    pub = _check(httpx.post(f"{GRAPH_FB}/{uid}/media_publish", data={
-        "creation_id": creation_id,
-        "access_token": token,
-    }, timeout=60), "Publishing Instagram Reel").json()
+    # Stage 4: Publish Reel Live
+    pub = _check(httpx.post(f"{GRAPH_FB}/{uid}/media_publish", json={"creation_id": creation_id},
+                            headers=auth_headers, timeout=60),
+                 "Publishing Instagram Reel").json()
 
     link = ""
     try:
-        link_res = httpx.get(f"{GRAPH_FB}/{pub['id']}", params={
-            "fields": "permalink",
-            "access_token": token,
-        }, timeout=30).json()
+        link_res = httpx.get(f"{GRAPH_FB}/{pub['id']}", params={"fields": "permalink"},
+                             headers={"Authorization": f"Bearer {token}"}, timeout=30).json()
         link = link_res.get("permalink", "")
     except Exception:  # noqa: BLE001
         pass
