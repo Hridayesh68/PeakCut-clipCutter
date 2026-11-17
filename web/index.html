@@ -829,6 +829,7 @@ dialog[open]{animation:fadein .16s ease}
 </div>
 <dialog id="clipdlg"></dialog>
 <dialog id="formdlg"></dialog>
+<dialog id="bulkqueuedlg"></dialog>
 <input type="file" id="file" accept="video/*" multiple hidden>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div class="pop" id="bellpop" role="dialog" aria-label="Notifications" hidden></div>
@@ -1764,6 +1765,7 @@ function drawSelBar() {
   put(bar, `<b>${n} selected</b>
     <button class="btn sm" data-act="selall">Select all</button>
     <button class="btn sm primary" data-act="seldl" ${dl ? "" : "disabled"}>${ic("down")}Download${dl ? ` ${dl} clip${dl === 1 ? "" : "s"}` : ""}</button>
+    <button class="btn sm primary" data-act="selqueue" ${dl ? "" : "disabled"}>${ic("send")}Queue ${dl} clip${dl === 1 ? "" : "s"}</button>
     <button class="btn sm danger" data-act="seldel">${ic("trash")}Delete</button>
     <button class="btn sm" data-act="selclear">Cancel</button>`);
 }
@@ -1772,6 +1774,86 @@ function zipDownload(ids) {
   if (ids.length > 150) return toast("That is a lot at once. Download up to 150 clips at a time.", "bad");
   toast(ids.length === 1 ? "Preparing your clip…" : `Preparing ${ids.length} clips as one download…`, "ok");
   const a = document.createElement("a"); a.href = "/api/clips.zip?ids=" + encodeURIComponent(ids.join(",")); a.download = ""; document.body.append(a); a.click(); a.remove();
+}
+function openBulkQueueDlg(items) {
+  if (!items || !items.length) return toast("No clips selected to queue.", "bad");
+  const dlg = $("#bulkqueuedlg");
+  if (!dlg) return;
+  const accounts = S.accounts || [];
+  if (!accounts.length) return toast("No accounts connected yet. Connect one in Settings.", "bad");
+
+  dlg.innerHTML = `<form method="dialog" class="dlg" style="max-width:480px">
+    <h2>Bulk Queue Clips</h2>
+    <p class="help">Schedule <b>${items.length} clip${items.length === 1 ? "" : "s"}</b> to be posted automatically with a delay between each.</p>
+    
+    <div style="margin-top:12px">
+      <b>Post to Accounts</b>
+      <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+        ${accounts.map(a => `<label class="ck"><input type="checkbox" data-bqacc value="${esc(a.id)}" checked> ${esc(a.label)} · ${esc(a.name)}</label>`).join("")}
+      </div>
+    </div>
+
+    <div class="two" style="margin-top:14px">
+      <label class="f"><span>Delay between posts</span>
+        <select id="bq-gap">
+          <option value="5">5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30" selected>30 minutes</option>
+          <option value="60">1 hour (60 min)</option>
+          <option value="120">2 hours (120 min)</option>
+          <option value="180">3 hours (180 min)</option>
+        </select>
+      </label>
+      <label class="f"><span>First post timing</span>
+        <select id="bq-startnow">
+          <option value="1" selected>Post first clip immediately</option>
+          <option value="0">Wait delay before first clip</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <label class="ck" style="font-size:12px;opacity:0.85">
+        <input type="checkbox" id="bq-repost" value="1"> Allow repost if already posted
+      </label>
+    </div>
+
+    <div class="dlg-foot" style="margin-top:20px">
+      <button class="btn" value="cancel" type="button" data-act="closebulkdlg">Cancel</button>
+      <button class="btn primary" id="bq-submit" type="button">${ic("send")}Queue ${items.length} clip${items.length === 1 ? "" : "s"}</button>
+    </div>
+  </form>`;
+
+  const btn = $("#bq-submit");
+  btn.onclick = async () => {
+    const accs = $$("#bulkqueuedlg [data-bqacc]:checked").map(i => i.value);
+    if (!accs.length) return toast("Select at least one account.", "bad");
+    const gap = Number($("#bq-gap").value) || 30;
+    const startNow = $("#bq-startnow").value === "1";
+    const allowRepost = !!$("#bq-repost").checked;
+
+    btn.disabled = true;
+    try {
+      const res = await send("/api/posts/bulk", {
+        items: items,
+        accounts: accs,
+        gap_minutes: gap,
+        start_now: startNow,
+        repost: allowRepost
+      });
+      dlg.close();
+      toast(`Successfully queued ${res.queued} post${res.queued === 1 ? "" : "s"}.`, "ok");
+      sel().clear();
+      render();
+      return tick();
+    } catch (e) {
+      toast(e.message, "bad");
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  dlg.showModal();
 }
 function askTyped(title, text, mustType, okLabel) {
   return new Promise(res => {
@@ -2145,6 +2227,7 @@ function drawClipDlg(full) {
         <h3>Post it</h3>
         <div id="dposts" class="row" style="gap:4px"></div>
         ${S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
+          <div class="row" style="margin-top:6px"><label class="ck" style="font-size:12px;opacity:0.85"><input type="checkbox" id="ckrepost" value="1"> Allow repost if already posted</label></div>
           <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
           : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
@@ -2157,6 +2240,7 @@ function drawClipDlg(full) {
 }
 $("#clipdlg").addEventListener("close", () => { $("#clipdlg").innerHTML = ""; D.jid = null; });
 $("#clipdlg").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+$("#bulkqueuedlg")?.addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 
 /* ============================================================ render + polling */
 function render() {
@@ -2322,6 +2406,11 @@ document.addEventListener("click", async e => {
     }
     if (a === "dlall") return zipDownload((jobOf(d.j)?.clips || []).filter(c => c.status === "done").map(c => d.j + "." + c.id));
     if (a === "seldl") return zipDownload(selClips());
+    if (a === "selqueue") {
+      const clips = selClips().map(s => { const [job, clip] = s.split("."); return {job, clip}; });
+      return openBulkQueueDlg(clips);
+    }
+    if (a === "closebulkdlg") { $("#bulkqueuedlg")?.close(); return; }
     if (a === "selclear") { sel().clear(); return render(); }
     if (a === "selall") {
       const cid = creatorId();
@@ -2443,8 +2532,9 @@ document.addEventListener("click", async e => {
     if (a === "postnow" || a === "postqueue") {
       const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
       if (!accs.length) return toast("Tick at least one account first.", "bad");
+      const allowRepost = !!$("#ckrepost")?.checked;
       if (a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
-      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow"});
+      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow", repost:allowRepost});
       toast(a === "postnow" ? "Posting now" : "Added to the queue", "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }

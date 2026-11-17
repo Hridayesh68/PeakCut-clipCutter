@@ -1483,10 +1483,41 @@ def add_posts(body: dict = Body(...)):
     clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
     if not clip or clip.get("status") != "done":
         raise HTTPException(404, "That clip is not ready")
-    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
+    allow_repost = bool(body.get("repost") or body.get("allow_repost"))
+    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20],
+                           now=bool(body.get("now")), allow_repost=allow_repost)
     if not made:
-        raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
+        raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to (or enable repost).")
     return {"queued": len(made)}
+
+
+@app.post("/api/posts/bulk")
+def add_posts_bulk(body: dict = Body(...)):
+    items = body.get("items", [])
+    if not items or not isinstance(items, list):
+        raise HTTPException(400, "No clips provided for bulk queue.")
+    target_accounts = [str(a) for a in body.get("accounts", [])][:20]
+    if not target_accounts:
+        raise HTTPException(400, "Select at least one account.")
+    gap_minutes = max(1, int(body.get("gap_minutes", 30)))
+    start_now = bool(body.get("start_now", True))
+    allow_repost = bool(body.get("repost") or body.get("allow_repost", False))
+
+    job_clips = []
+    for it in items:
+        jid = str(it.get("job", ""))
+        cid = str(it.get("clip", ""))
+        job = jobs.get(jid)
+        clip = next((c for c in job["clips"] if c["id"] == cid), None) if job else None
+        if clip and clip.get("status") == "done":
+            job_clips.append((job, clip))
+
+    if not job_clips:
+        raise HTTPException(404, "None of the selected clips are ready to post.")
+
+    made = posting.enqueue_bulk(job_clips, target_accounts, gap_minutes=gap_minutes,
+                                start_now=start_now, allow_repost=allow_repost)
+    return {"queued": len(made), "clips_count": len(job_clips)}
 
 
 @app.post("/api/posts/{pid}/{action}")

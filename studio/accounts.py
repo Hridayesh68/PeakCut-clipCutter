@@ -493,10 +493,10 @@ def _ig_token(acc) -> str:
     return acc["token"]
 
 
-def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
+def instagram_upload(acc, path: Path, caption: str, job_id: str = "", creator_name: str = ""):
     """End-to-end Instagram Reel Publishing Pipeline:
-    Stage 1: Stage local video clip to Cloudinary CDN for direct .mp4 crawler access
-    Stage 2: Create Container on Meta Graph API v27.0
+    Stage 1: Stage local video clip (and high-res thumbnail) to Cloudinary CDN inside creator's subfolder
+    Stage 2: Create Container on Meta Graph API v27.0 with media_type=REELS, video_url, cover_url, and caption
     Stage 3: Poll Container Status until FINISHED (up to 24 attempts / 2 minutes)
     Stage 4: Publish Reel Live
     """
@@ -504,15 +504,24 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
     uid = acc.get("user_id") or config.env("META_IG_USER_ID") or config.env("IG_USER_ID") or "17841462625637581"
     auth_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # Stage 1: Upload to Cloudinary CDN so Meta's crawler can download directly without ngrok warnings
+    # Stage 1: Upload video clip and high-res thumbnail to Cloudinary CDN
     from . import cloudinary_service
     try:
-        video_url = cloudinary_service.upload_clip_to_cloudinary(path)
+        video_url = cloudinary_service.upload_clip_to_cloudinary(path, creator_name=creator_name)
     except Exception as e:
         if config.PUBLIC_URL.startswith("https://") and job_id:
             video_url = clip_link(job_id, path.name)
         else:
             raise RuntimeError(f"Cloud video staging failed: {e}") from e
+
+    # Upload sharp thumbnail if available so Meta doesn't pick a random blurry frame
+    cover_url = None
+    cover_path = path.with_suffix(".jpg")
+    if cover_path.is_file():
+        try:
+            cover_url = cloudinary_service.upload_image_to_cloudinary(cover_path, creator_name=creator_name)
+        except Exception:
+            pass
 
     # Stage 2: Create Media Container
     post_data = {
@@ -520,6 +529,9 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
         "video_url": video_url,
         "caption": caption[:2200],
     }
+    if cover_url:
+        post_data["cover_url"] = cover_url
+
     box = _check(httpx.post(f"{GRAPH_FB}/{uid}/media", json=post_data, headers=auth_headers, timeout=60),
                  "Creating Instagram Reel container").json()
     creation_id = box["id"]

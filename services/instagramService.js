@@ -1,5 +1,7 @@
 const axios = require('axios');
-const { uploadClipToCloudinary } = require('./cloudinaryService');
+const fs = require('fs');
+const path = require('path');
+const { uploadClipToCloudinary, uploadImageToCloudinary } = require('./cloudinaryService');
 
 const GRAPH_API_BASE = 'https://graph.facebook.com/v27.0';
 
@@ -34,7 +36,9 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 async function publishReel({
   localVideoPath,
+  localCoverPath = null,
   caption = '',
+  creatorName = '',
   accessToken,
   igUserId = process.env.IG_USER_ID || '17841462625637581',
   onProgress = () => {}
@@ -46,21 +50,36 @@ async function publishReel({
     throw new Error('Missing Instagram User ID (igUserId).');
   }
 
-  // Stage 1: Upload to Cloudinary for crawler-friendly CDN delivery
+  // Stage 1: Upload to Cloudinary for crawler-friendly CDN delivery inside creator's subfolder
   onProgress({ stage: 'uploading_cloudinary', message: 'Uploading clip to Cloudinary CDN...' });
-  const publicVideoUrl = await uploadClipToCloudinary(localVideoPath);
+  const publicVideoUrl = await uploadClipToCloudinary(localVideoPath, creatorName);
+
+  // Upload high-res thumbnail if available so Meta displays a crisp cover
+  let coverUrl = null;
+  const potentialCoverPath = localCoverPath || localVideoPath.replace(/\.[^/.]+$/, '.jpg');
+  if (fs.existsSync(potentialCoverPath)) {
+    try {
+      coverUrl = await uploadImageToCloudinary(potentialCoverPath, creatorName);
+    } catch (e) {
+      console.warn('Optional thumbnail upload failed:', e.message);
+    }
+  }
 
   // Stage 2: Create Media Container on Meta Graph API
   onProgress({ stage: 'creating_container', message: 'Creating Instagram Reel container on Meta...', videoUrl: publicVideoUrl });
   let creationId;
+  const containerPayload = {
+    media_type: 'REELS',
+    video_url: publicVideoUrl,
+    caption: caption
+  };
+  if (coverUrl) {
+    containerPayload.cover_url = coverUrl;
+  }
   try {
     const containerRes = await axios.post(
       `${GRAPH_API_BASE}/${igUserId}/media`,
-      {
-        media_type: 'REELS',
-        video_url: publicVideoUrl,
-        caption: caption
-      },
+      containerPayload,
       {
         headers: {
           'Authorization': `Bearer ${accessToken}`,

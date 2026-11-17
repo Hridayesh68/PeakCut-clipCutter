@@ -11,24 +11,27 @@ cloudinary.config({
   secure: true
 });
 
+function slugify(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^_+|_+$/g, '') || 'general';
+}
+
 /**
- * Uploads a local rendered video clip to Cloudinary CDN.
- * Generates a clean, crawler-friendly HTTPS .mp4 URL for Meta's Instagram crawler.
+ * Uploads a local rendered video clip to Cloudinary CDN inside the creator's subfolder.
  * 
  * @param {string} localFilePath - Path to local .mp4 video file
+ * @param {string} creatorName - Name or slug of the creator
  * @returns {Promise<string>} Direct secure .mp4 URL on Cloudinary CDN
  */
-async function uploadClipToCloudinary(localFilePath) {
-  // Validate file existence
+async function uploadClipToCloudinary(localFilePath, creatorName = '') {
   if (!fs.existsSync(localFilePath)) {
     throw new Error(`Rendered video clip not found at path: ${localFilePath}`);
   }
 
+  const folder = `peakcut_reels/${slugify(creatorName)}`;
   try {
-    // Explicitly set resource_type: 'video' and format: 'mp4' so Cloudinary returns a direct .mp4 URL
     const result = await cloudinary.uploader.upload(localFilePath, {
       resource_type: 'video',
-      folder: 'peakcut_reels',
+      folder: folder,
       format: 'mp4'
     });
 
@@ -38,11 +41,43 @@ async function uploadClipToCloudinary(localFilePath) {
 
     return result.secure_url;
   } catch (error) {
-    console.error('Cloudinary API upload error:', error);
-    throw new Error(`Cloudinary upload failed: ${error.message || error}`);
+    console.error('Cloudinary API video upload error:', error);
+    throw new Error(`Cloudinary video upload failed: ${error.message || error}`);
+  }
+}
+
+/**
+ * Uploads a local thumbnail image to Cloudinary CDN inside the creator's thumbnails subfolder.
+ * 
+ * @param {string} localImagePath - Path to local .jpg image file
+ * @param {string} creatorName - Name or slug of the creator
+ * @returns {Promise<string>} Direct secure .jpg URL on Cloudinary CDN
+ */
+async function uploadImageToCloudinary(localImagePath, creatorName = '') {
+  if (!fs.existsSync(localImagePath)) {
+    throw new Error(`Thumbnail image not found at path: ${localImagePath}`);
+  }
+
+  const folder = `peakcut_reels/${slugify(creatorName)}/thumbnails`;
+  try {
+    const result = await cloudinary.uploader.upload(localImagePath, {
+      resource_type: 'image',
+      folder: folder,
+      format: 'jpg'
+    });
+
+    if (!result || !result.secure_url) {
+      throw new Error(`Cloudinary upload returned no secure_url: ${JSON.stringify(result)}`);
+    }
+
+    return result.secure_url;
+  } catch (error) {
+    console.error('Cloudinary API image upload error:', error);
+    throw new Error(`Cloudinary image upload failed: ${error.message || error}`);
   }
 }
 
 module.exports = {
-  uploadClipToCloudinary
+  uploadClipToCloudinary,
+  uploadImageToCloudinary
 };

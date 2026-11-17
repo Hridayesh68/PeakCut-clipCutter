@@ -54,7 +54,7 @@ def _next_slot(account_id, gap_min, cap):
     return t
 
 
-def enqueue(job, clip, account_ids, now=False) -> list:
+def enqueue(job, clip, account_ids, now=False, allow_repost=False, custom_due=None) -> list:
     c = creators.get(job["creator"]) or creators.DEFAULTS
     made = []
     with _lock:
@@ -62,10 +62,16 @@ def enqueue(job, clip, account_ids, now=False) -> list:
             acc = accounts.get(aid)
             if not acc:
                 continue
+            statuses_to_block = OPEN if allow_repost else (OPEN + ("posted",))
             if any(p["job"] == job["id"] and p["clip"] == clip["id"] and p["account"] == aid
-                   and p["status"] in OPEN + ("posted",) for p in _mine()):
-                continue  # never post the same clip to the same account twice
-            due = time.time() if now else _next_slot(aid, c["post_gap_min"], c["daily_cap"])
+                   and p["status"] in statuses_to_block for p in _mine()):
+                continue
+            if custom_due is not None:
+                due = custom_due
+            elif now:
+                due = time.time()
+            else:
+                due = _next_slot(aid, c["post_gap_min"], c["daily_cap"])
             p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
                  "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
                  "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
@@ -76,6 +82,18 @@ def enqueue(job, clip, account_ids, now=False) -> list:
     for p in made:
         _mirror(p)
     return made
+
+
+def enqueue_bulk(job_clips: list, account_ids: list, gap_minutes: int = 30, start_now: bool = True, allow_repost: bool = False) -> list:
+    """Queue multiple clips with staggered spacing (e.g. 15, 30, 60 minutes apart)."""
+    all_made = []
+    base_time = time.time()
+    gap_sec = max(1, int(gap_minutes)) * 60
+    for idx, (job, clip) in enumerate(job_clips):
+        due = base_time + (idx * gap_sec if (start_now or idx > 0) else gap_sec)
+        made = enqueue(job, clip, account_ids, now=(start_now and idx == 0), allow_repost=allow_repost, custom_due=due)
+        all_made.extend(made)
+    return all_made
 
 
 def on_clip_ready(job, clip):
@@ -110,7 +128,7 @@ def _post(p):
         if acc["platform"] == "youtube":
             rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), creator["privacy"])
         elif acc["platform"] == "instagram":
-            rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"])
+            rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"], creator.get("name", ""))
         elif acc["platform"] == "tiktok":
             rid, url = accounts.tiktok_upload(acc, path, f"{title}\n\n{cap}", creator["privacy"])
         else:
