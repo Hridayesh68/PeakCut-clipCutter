@@ -1,8 +1,9 @@
 # PeakCut: one image with the web server, the clip pipeline and ffmpeg.
 FROM python:3.11-slim
 
+# Install system dependencies: ffmpeg, ca-certificates, bzip2, fonts, and curl for ngrok download
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates bzip2 fonts-noto-core fonts-noto-cjk \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates bzip2 fonts-noto-core fonts-noto-cjk curl unzip \
  && rm -rf /var/lib/apt/lists/*
 # yt-dlp needs a JavaScript runtime for YouTube
 COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
@@ -13,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY studio studio
 COPY web web
 
+# Install ngrok
 ENV PEAKCUT_DATA=/data \
     PEAKCUT_HOST=0.0.0.0 \
     PEAKCUT_PORT=8765 \

@@ -1359,6 +1359,7 @@ function drawAdd(variant) {
   const c = creator();
   $("#add").innerHTML = `<form class="composer ${variant === "hero" ? "big" : "compact"}" id="addform">
     <div class="composer-input">${ic("link")}<input id="url" placeholder="Paste a YouTube, Twitch or Kick video link" autocomplete="off" aria-label="Video link"></div>
+    <textarea id="prompt" placeholder="Enter a prompt for better hashtags and analysis (optional)..." style="width:100%; height:60px; padding:12px; border:0; background:transparent; font-size:14px; border-radius:0; outline:none; transition:border-color .15s ease; border-bottom:1px solid var(--line-2);" aria-label="Prompt"></textarea>
     <div class="att" id="att"><div><div class="att-in" id="attIn"></div></div></div>
     <div class="composer-bar">
       <button type="button" class="chip" data-act="pickfile">${ic("up")}Upload video</button>
@@ -1641,6 +1642,8 @@ async function makeClips() {
   A.busy = true; drawAtt();
   let started = 0, failed = 0;
   const who = targetCreator(), opts = jobOptions();
+  const prompt = $("#prompt")?.value.trim();
+  if (prompt) opts.prompt = prompt;
   for (const l of A.links.filter(x => x.state === "ok")) {
     l.sending = true; drawAtt();
     try { await send("/api/jobs", {url: l.url, options: opts, creator: who}); l.state = "done"; started++; }
